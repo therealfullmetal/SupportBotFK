@@ -8,17 +8,33 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 const adminId = process.env.ADMIN_CHAT_ID;
 
 if (!token) {
-    console.error('Ошибка: TELEGRAM_BOT_TOKEN не найден в .env');
+    console.error('Ошибка: TELEGRAM_BOT_TOKEN не найден в переменных окружения');
+    console.error('Убедитесь, что переменная TELEGRAM_BOT_TOKEN установлена на Railway');
     process.exit(1);
 }
 
+console.log('Инициализация бота...');
 const bot = new TelegramBot(token, { polling: true });
 let db;
 
-// Инициализация БД
-setupDb().then(database => {
-    db = database;
-    console.log('Бот запущен и база данных готова.');
+// Инициализация БД с обработкой ошибок
+setupDb()
+    .then(database => {
+        db = database;
+        console.log('✅ Бот запущен и база данных готова.');
+    })
+    .catch(error => {
+        console.error('❌ Ошибка при инициализации базы данных:', error);
+        process.exit(1);
+    });
+
+// Обработка ошибок бота
+bot.on('polling_error', (error) => {
+    console.error('Ошибка polling:', error);
+});
+
+bot.on('error', (error) => {
+    console.error('Ошибка бота:', error);
 });
 
 // Состояния (шаги)
@@ -39,44 +55,62 @@ const STEPS = {
 
 // Главная функция обработки сообщений
 bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    const text = msg.text;
+    try {
+        const chatId = msg.chat.id;
+        const text = msg.text;
 
-    if (!db) return;
+        if (!db) {
+            console.log('База данных еще не инициализирована, пропускаем сообщение');
+            return;
+        }
 
-    // Начало работы
-    if (text === '/start' || text?.toLowerCase() === 'начать') {
-        await db.run('INSERT OR REPLACE INTO users (chat_id, step) VALUES (?, ?)', [chatId, STEPS.WELCOME]);
-        return sendWelcome(chatId);
-    }
+        // Начало работы
+        if (text === '/start' || text?.toLowerCase() === 'начать') {
+            await db.run('INSERT OR REPLACE INTO users (chat_id, step) VALUES (?, ?)', [chatId, STEPS.WELCOME]);
+            return sendWelcome(chatId);
+        }
 
-    const user = await db.get('SELECT * FROM users WHERE chat_id = ?', [chatId]);
-    if (!user) return;
+        const user = await db.get('SELECT * FROM users WHERE chat_id = ?', [chatId]);
+        if (!user) return;
 
-    // Обработка текстовых вводов по шагам
-    switch (user.step) {
-        case STEPS.NAME:
-            await db.run('UPDATE users SET user_name = ?, step = ? WHERE chat_id = ?', [text, STEPS.GOAL, chatId]);
-            return askGoal(chatId, text);
+        // Обработка текстовых вводов по шагам
+        switch (user.step) {
+            case STEPS.NAME:
+                await db.run('UPDATE users SET user_name = ?, step = ? WHERE chat_id = ?', [text, STEPS.GOAL, chatId]);
+                return askGoal(chatId, text);
 
-        case 'goal_custom':
-            await db.run('UPDATE users SET main_goal = ?, step = ? WHERE chat_id = ?', [text, STEPS.FATIGUE, chatId]);
-            return askFatigue(chatId);
+            case 'goal_custom':
+                await db.run('UPDATE users SET main_goal = ?, step = ? WHERE chat_id = ?', [text, STEPS.FATIGUE, chatId]);
+                return askFatigue(chatId);
 
-        case STEPS.CONTACT:
-            // Валидация контакта (простой вариант)
-            await db.run('UPDATE users SET contact_data = ?, step = ? WHERE chat_id = ?', [text, STEPS.ANALYZING, chatId]);
-            return finalizeResults(chatId, user.user_name);
+            case STEPS.CONTACT:
+                // Валидация контакта (простой вариант)
+                await db.run('UPDATE users SET contact_data = ?, step = ? WHERE chat_id = ?', [text, STEPS.ANALYZING, chatId]);
+                return finalizeResults(chatId, user.user_name);
+        }
+    } catch (error) {
+        console.error('Ошибка при обработке сообщения:', error);
     }
 });
 
 // Обработка кнопок
 bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    const data = query.data;
-    const user = await db.get('SELECT * FROM users WHERE chat_id = ?', [chatId]);
+    try {
+        const chatId = query.message.chat.id;
+        const data = query.data;
+        
+        if (!db) {
+            console.log('База данных еще не инициализирована, пропускаем callback');
+            bot.answerCallbackQuery(query.id, { text: 'Бот еще загружается, попробуйте позже' });
+            return;
+        }
+        
+        const user = await db.get('SELECT * FROM users WHERE chat_id = ?', [chatId]);
 
-    if (!user) return;
+        if (!user) {
+            bot.answerCallbackQuery(query.id, { text: 'Начните с команды /start' });
+            return;
+        }
 
     if (data === 'start_quiz') {
         await db.run('UPDATE users SET step = ? WHERE chat_id = ?', [STEPS.NAME, chatId]);
@@ -168,6 +202,14 @@ bot.on('callback_query', async (query) => {
                 ]
             };
             return bot.sendMessage(chatId, `Укажите, пожалуйста, ваш ${platform === 'Telegram' ? 'username или номер телеграма' : 'номер телефона'} вручную или нажмите кнопку ниже:`, { reply_markup: replyMarkup });
+        }
+    }
+    } catch (error) {
+        console.error('Ошибка при обработке callback_query:', error);
+        try {
+            bot.answerCallbackQuery(query.id, { text: 'Произошла ошибка, попробуйте позже' });
+        } catch (e) {
+            console.error('Ошибка при отправке ответа на callback:', e);
         }
     }
 });
@@ -309,11 +351,13 @@ function askContact(chatId) {
 }
 
 async function finalizeResults(chatId, name) {
-    await bot.sendMessage(chatId, `Спасибо, ${name}! Анализирую ваши ответы… ✨`);
+    try {
+        await bot.sendMessage(chatId, `Спасибо, ${name}! Анализирую ваши ответы… ✨`);
 
-    // Имитация анализа
-    setTimeout(async () => {
-        const user = await db.get('SELECT * FROM users WHERE chat_id = ?', [chatId]);
+        // Имитация анализа
+        setTimeout(async () => {
+            try {
+                const user = await db.get('SELECT * FROM users WHERE chat_id = ?', [chatId]);
 
         let report = `📊 *Ваш персональный мини-отчет:*\n\n`;
 
@@ -369,7 +413,17 @@ async function finalizeResults(chatId, name) {
             bot.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' });
         }
 
-        await db.run('UPDATE users SET completed = 1, step = ? WHERE chat_id = ?', [STEPS.DONE, chatId]);
-
-    }, 3000);
+                await db.run('UPDATE users SET completed = 1, step = ? WHERE chat_id = ?', [STEPS.DONE, chatId]);
+            } catch (error) {
+                console.error('Ошибка в finalizeResults:', error);
+                try {
+                    await bot.sendMessage(chatId, 'Произошла ошибка при обработке результатов. Пожалуйста, попробуйте позже.');
+                } catch (e) {
+                    console.error('Ошибка при отправке сообщения об ошибке:', e);
+                }
+            }
+        }, 3000);
+    } catch (error) {
+        console.error('Ошибка в finalizeResults (внешний блок):', error);
+    }
 }
