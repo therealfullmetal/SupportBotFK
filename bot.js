@@ -98,13 +98,13 @@ bot.on('callback_query', async (query) => {
     try {
         const chatId = query.message.chat.id;
         const data = query.data;
-        
+
         if (!db) {
             console.log('База данных еще не инициализирована, пропускаем callback');
             bot.answerCallbackQuery(query.id, { text: 'Бот еще загружается, попробуйте позже' });
             return;
         }
-        
+
         const user = await db.get('SELECT * FROM users WHERE chat_id = ?', [chatId]);
 
         if (!user) {
@@ -112,98 +112,98 @@ bot.on('callback_query', async (query) => {
             return;
         }
 
-    if (data === 'start_quiz') {
-        await db.run('UPDATE users SET step = ? WHERE chat_id = ?', [STEPS.NAME, chatId]);
-        return bot.sendMessage(chatId, 'Отлично! Для начала, как к вам обращаться?');
-    }
-
-    // Вопрос 2: Цель
-    if (user.step === STEPS.GOAL) {
-        if (data === 'goal_custom') {
-            await db.run('UPDATE users SET step = ? WHERE chat_id = ?', ['goal_custom', chatId]);
-            return bot.sendMessage(chatId, 'Напишите, пожалуйста, вашу главную цель:');
+        if (data === 'start_quiz') {
+            await db.run('UPDATE users SET step = ? WHERE chat_id = ?', [STEPS.NAME, chatId]);
+            return bot.sendMessage(chatId, 'Отлично! Для начала, как к вам обращаться?');
         }
-        await db.run('UPDATE users SET main_goal = ?, step = ? WHERE chat_id = ?', [data, STEPS.FATIGUE, chatId]);
-        return askFatigue(chatId);
-    }
 
-    // Вопрос 3: Усталость
-    if (user.step === STEPS.FATIGUE) {
-        await db.run('UPDATE users SET fatigue_level = ?, step = ? WHERE chat_id = ?', [data, STEPS.ACTIVITY, chatId]);
-        return askActivity(chatId);
-    }
-
-    // Вопрос 4: Активность
-    if (user.step === STEPS.ACTIVITY) {
-        await db.run('UPDATE users SET activity = ?, step = ? WHERE chat_id = ?', [data, STEPS.DIGESTION, chatId]);
-        return askDigestion(chatId);
-    }
-
-    // Вопрос 5: Пищеварение
-    if (user.step === STEPS.DIGESTION) {
-        await db.run('UPDATE users SET digestion = ?, step = ? WHERE chat_id = ?', [data, STEPS.BEAUTY, chatId]);
-        return askBeauty(chatId);
-    }
-
-    // Вопрос 6: Красота
-    if (user.step === STEPS.BEAUTY) {
-        await db.run('UPDATE users SET beauty_focus = ?, step = ? WHERE chat_id = ?', [data, STEPS.FOCUS, chatId]);
-        return askFocus(chatId);
-    }
-
-    // Вопрос 7: Фокус (Мультивыбор)
-    if (user.step === STEPS.FOCUS) {
-        if (data === 'focus_done') {
-            await db.run('UPDATE users SET step = ? WHERE chat_id = ?', [STEPS.FORMAT, chatId]);
-            return askFormat(chatId);
+        // Вопрос 2: Цель
+        if (user.step === STEPS.GOAL) {
+            if (data === 'goal_custom') {
+                await db.run('UPDATE users SET step = ? WHERE chat_id = ?', ['goal_custom', chatId]);
+                return bot.sendMessage(chatId, 'Напишите, пожалуйста, вашу главную цель:');
+            }
+            await db.run('UPDATE users SET main_goal = ?, step = ? WHERE chat_id = ?', [data, STEPS.FATIGUE, chatId]);
+            return askFatigue(chatId);
         }
-        let current = user.current_focus ? JSON.parse(user.current_focus) : [];
-        if (current.includes(data)) {
-            current = current.filter(i => i !== data);
-        } else {
-            current.push(data);
-        }
-        await db.run('UPDATE users SET current_focus = ? WHERE chat_id = ?', [JSON.stringify(current), chatId]);
-        return updateFocusButtons(chatId, query.message.message_id, current);
-    }
 
-    // Вопрос 8: Формат (Мультивыбор)
-    if (user.step === STEPS.FORMAT) {
-        if (data === 'format_done') {
-            await db.run('UPDATE users SET step = ? WHERE chat_id = ?', [STEPS.CONTACT, chatId]);
-            return askContact(chatId);
+        // Вопрос 3: Усталость
+        if (user.step === STEPS.FATIGUE) {
+            await db.run('UPDATE users SET fatigue_level = ?, step = ? WHERE chat_id = ?', [data, STEPS.ACTIVITY, chatId]);
+            return askActivity(chatId);
         }
-        let current = user.preferred_format ? JSON.parse(user.preferred_format) : [];
-        if (current.includes(data)) {
-            current = current.filter(i => i !== data);
-        } else {
-            current.push(data);
-        }
-        await db.run('UPDATE users SET preferred_format = ? WHERE chat_id = ?', [JSON.stringify(current), chatId]);
-        return updateFormatButtons(chatId, query.message.message_id, current);
-    }
 
-    // Сбор контактов
-    if (user.step === STEPS.CONTACT) {
-        if (data === 'contact_use_profile') {
-            const username = query.from.username ? `@${query.from.username}` : query.from.first_name;
-            await db.run('UPDATE users SET contact_data = ?, contact_type = ?, step = ? WHERE chat_id = ?', [username, 'Telegram (Auto)', STEPS.ANALYZING, chatId]);
-            bot.answerCallbackQuery(query.id, { text: 'Данные профиля приняты!' });
-            return finalizeResults(chatId, user.user_name);
+        // Вопрос 4: Активность
+        if (user.step === STEPS.ACTIVITY) {
+            await db.run('UPDATE users SET activity = ?, step = ? WHERE chat_id = ?', [data, STEPS.DIGESTION, chatId]);
+            return askDigestion(chatId);
         }
-        if (data === 'contact_tg' || data === 'contact_wa') {
-            const platform = data === 'contact_tg' ? 'Telegram' : 'WhatsApp';
-            await db.run('UPDATE users SET contact_type = ? WHERE chat_id = ?', [platform, chatId]);
 
-            // Если это телеграм, предлагаем еще и авто-кнопку
-            const replyMarkup = {
-                inline_keyboard: [
-                    [{ text: '👤 Использовать мой @username', callback_data: 'contact_use_profile' }]
-                ]
-            };
-            return bot.sendMessage(chatId, `Укажите, пожалуйста, ваш ${platform === 'Telegram' ? 'username или номер телеграма' : 'номер телефона'} вручную или нажмите кнопку ниже:`, { reply_markup: replyMarkup });
+        // Вопрос 5: Пищеварение
+        if (user.step === STEPS.DIGESTION) {
+            await db.run('UPDATE users SET digestion = ?, step = ? WHERE chat_id = ?', [data, STEPS.BEAUTY, chatId]);
+            return askBeauty(chatId);
         }
-    }
+
+        // Вопрос 6: Красота
+        if (user.step === STEPS.BEAUTY) {
+            await db.run('UPDATE users SET beauty_focus = ?, step = ? WHERE chat_id = ?', [data, STEPS.FOCUS, chatId]);
+            return askFocus(chatId);
+        }
+
+        // Вопрос 7: Фокус (Мультивыбор)
+        if (user.step === STEPS.FOCUS) {
+            if (data === 'focus_done') {
+                await db.run('UPDATE users SET step = ? WHERE chat_id = ?', [STEPS.FORMAT, chatId]);
+                return askFormat(chatId);
+            }
+            let current = user.current_focus ? JSON.parse(user.current_focus) : [];
+            if (current.includes(data)) {
+                current = current.filter(i => i !== data);
+            } else {
+                current.push(data);
+            }
+            await db.run('UPDATE users SET current_focus = ? WHERE chat_id = ?', [JSON.stringify(current), chatId]);
+            return updateFocusButtons(chatId, query.message.message_id, current);
+        }
+
+        // Вопрос 8: Формат (Мультивыбор)
+        if (user.step === STEPS.FORMAT) {
+            if (data === 'format_done') {
+                await db.run('UPDATE users SET step = ? WHERE chat_id = ?', [STEPS.CONTACT, chatId]);
+                return askContact(chatId);
+            }
+            let current = user.preferred_format ? JSON.parse(user.preferred_format) : [];
+            if (current.includes(data)) {
+                current = current.filter(i => i !== data);
+            } else {
+                current.push(data);
+            }
+            await db.run('UPDATE users SET preferred_format = ? WHERE chat_id = ?', [JSON.stringify(current), chatId]);
+            return updateFormatButtons(chatId, query.message.message_id, current);
+        }
+
+        // Сбор контактов
+        if (user.step === STEPS.CONTACT) {
+            if (data === 'contact_use_profile') {
+                const username = query.from.username ? `@${query.from.username}` : query.from.first_name;
+                await db.run('UPDATE users SET contact_data = ?, contact_type = ?, step = ? WHERE chat_id = ?', [username, 'Telegram (Auto)', STEPS.ANALYZING, chatId]);
+                bot.answerCallbackQuery(query.id, { text: 'Данные профиля приняты!' });
+                return finalizeResults(chatId, user.user_name);
+            }
+            if (data === 'contact_tg' || data === 'contact_wa') {
+                const platform = data === 'contact_tg' ? 'Telegram' : 'WhatsApp';
+                await db.run('UPDATE users SET contact_type = ? WHERE chat_id = ?', [platform, chatId]);
+
+                // Если это телеграм, предлагаем еще и авто-кнопку
+                const replyMarkup = {
+                    inline_keyboard: [
+                        [{ text: '👤 Использовать мой @username', callback_data: 'contact_use_profile' }]
+                    ]
+                };
+                return bot.sendMessage(chatId, `Укажите, пожалуйста, ваш ${platform === 'Telegram' ? 'username или номер телеграма' : 'номер телефона'} вручную или нажмите кнопку ниже:`, { reply_markup: replyMarkup });
+            }
+        }
     } catch (error) {
         console.error('Ошибка при обработке callback_query:', error);
         try {
@@ -359,59 +359,59 @@ async function finalizeResults(chatId, name) {
             try {
                 const user = await db.get('SELECT * FROM users WHERE chat_id = ?', [chatId]);
 
-        let report = `📊 *Ваш персональный мини-отчет:*\n\n`;
+                let report = `📊 *Ваш персональный мини-отчет:*\n\n`;
 
-        // Логика генерации отчета (упрощенная)
-        if (user.fatigue_level === 'Почти всегда' || user.main_goal === 'Энергия') {
-            report += `Исходя из ваших ответов, основная задача — повысить энергию и справиться с постоянной усталостью.`;
-        } else {
-            report += `Ваша цель — поддержать организм в тонусе и укрепить ${user.main_goal.toLowerCase()}.`;
-        }
+                // Логика генерации отчета (упрощенная)
+                if (user.fatigue_level === 'Почти всегда' || user.main_goal === 'Энергия') {
+                    report += `Исходя из ваших ответов, основная задача — повысить энергию и справиться с постоянной усталостью.`;
+                } else {
+                    report += `Ваша цель — поддержать организм в тонусе и укрепить ${user.main_goal.toLowerCase()}.`;
+                }
 
-        if (user.activity === 'Сидячая работа' && (user.digestion === 'Часто' || user.digestion === 'Постоянно')) {
-            report += ` При сидячей работе и проблемах с пищеварением важно работать комплексно: наладить микробиом и добавить адаптогены.`;
-        } else {
-            report += ` Рекомендуем обратить внимание на комплексы для поддержки обмена веществ.`;
-        }
+                if (user.activity === 'Сидячая работа' && (user.digestion === 'Часто' || user.digestion === 'Постоянно')) {
+                    report += ` При сидячей работе и проблемах с пищеварением важно работать комплексно: наладить микробиом и добавить адаптогены.`;
+                } else {
+                    report += ` Рекомендуем обратить внимание на комплексы для поддержки обмена веществ.`;
+                }
 
-        await bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
+                await bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
 
-        await new Promise(r => setTimeout(r, 1500));
+                await new Promise(r => setTimeout(r, 1500));
 
-        // Отправка гайдов
-        await bot.sendMessage(chatId, `🎁 *Ваши бесплатные материалы:*`, { parse_mode: 'Markdown' });
+                // Отправка гайдов
+                await bot.sendMessage(chatId, `🎁 *Ваши бесплатные материалы:*`, { parse_mode: 'Markdown' });
 
-        try {
-            await bot.sendDocument(chatId, path.join(__dirname, 'guides/3_analiza.pdf'), { caption: 'Гайд «3 анализа при усталости»' });
-            await bot.sendDocument(chatId, path.join(__dirname, 'guides/collagen.pdf'), { caption: 'Гайд «Коллаген: как выбрать и принимать»' });
-        } catch (e) {
-            bot.sendMessage(chatId, 'Гайды будут доступны через мгновение...');
-        }
+                try {
+                    await bot.sendDocument(chatId, path.join(__dirname, 'guides/guide_collagen.pdf'), { caption: 'Гайд «Коллаген: как выбрать и принимать»' });
+                } catch (e) {
+                    console.error('Ошибка при отправке гайда:', e);
+                    bot.sendMessage(chatId, 'Гайд будет доступен через мгновение...');
+                }
 
-        const promo = `🛒 *Специальное предложение для вас:*\n\nПромокод *ENERGY10* на скидку 10% для первого заказа на koreahealth.shop. Активен 7 дней.\n\n📌 *Рекомендуем продолжить погружение:*`;
+                const promo = `🛒 *Специальное предложение для вас:*\n\nПромокод *ENERGY10* на скидку 10% для первого заказа на koreahealth.shop. Активен 7 дней.\n\n📌 *Рекомендуем продолжить погружение:*`;
 
-        const finalKb = {
-            inline_keyboard: [
-                [{ text: 'Наш Telegram-канал', url: 'https://t.me/kumdang_store' }],
-                [{ text: 'Instagram', url: 'https://instagram.com/fares_korea' }],
-                [{ text: 'Перейти в канал Fares Korea', url: 'https://t.me/kumdang_store' }]
-            ]
-        };
+                const finalKb = {
+                    inline_keyboard: [
+                        [{ text: 'Наш Telegram-канал', url: 'https://t.me/kumdang_store' }],
+                        [{ text: 'Instagram', url: 'https://instagram.com/fares_korea' }],
+                        [{ text: 'Перейти в канал Fares Korea', url: 'https://t.me/kumdang_store' }]
+                    ]
+                };
 
-        await bot.sendMessage(chatId, promo, { parse_mode: 'Markdown', reply_markup: finalKb });
-        await bot.sendMessage(chatId, `А скоро с вами свяжусь я, Татьяна, чтобы уточнить детали и ответить на вопросы. Хорошего дня! 💫`);
+                await bot.sendMessage(chatId, promo, { parse_mode: 'Markdown', reply_markup: finalKb });
+                await bot.sendMessage(chatId, `А скоро с вами свяжусь я, Татьяна, чтобы уточнить детали и ответить на вопросы. Хорошего дня! 💫`);
 
-        // Уведомление админа
-        if (adminId) {
-            const adminMsg = `🚀 *Новый лид!*\n\n` +
-                `Имя: ${user.user_name}\n` +
-                `Цель: ${user.main_goal}\n` +
-                `Усталость: ${user.fatigue_level}\n` +
-                `Контакт (${user.contact_type}): ${user.contact_data}\n` +
-                `Фокус: ${user.current_focus}\n` +
-                `Создан: ${user.created_at}`;
-            bot.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' });
-        }
+                // Уведомление админа
+                if (adminId) {
+                    const adminMsg = `🚀 *Новый лид!*\n\n` +
+                        `Имя: ${user.user_name}\n` +
+                        `Цель: ${user.main_goal}\n` +
+                        `Усталость: ${user.fatigue_level}\n` +
+                        `Контакт (${user.contact_type}): ${user.contact_data}\n` +
+                        `Фокус: ${user.current_focus}\n` +
+                        `Создан: ${user.created_at}`;
+                    bot.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' });
+                }
 
                 await db.run('UPDATE users SET completed = 1, step = ? WHERE chat_id = ?', [STEPS.DONE, chatId]);
             } catch (error) {
